@@ -1,0 +1,9 @@
+{
+    "voxtral-4b": {
+        "url": "http://pve-3:8000/v1",
+        "model": "mistralai/Voxtral-4B-TTS-2603"
+    },
+    "orpheus-3b": {
+        "url": "http://your-server:8001/v1"
+    }
+}
