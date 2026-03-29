@@ -110,6 +110,27 @@ def build_playground_tab():
     """Build the playground tab. Returns (save_profile_btn, model, voice, ref_audio, ref_text)
     so main.py can wire the 'Save as Profile' button to the profiles tab."""
     choices = get_model_choices()
+    first_model = choices[0][1] if choices else None
+
+    # Pre-compute initial state for the first model so the UI is correct on load
+    init_voice_choices = []
+    init_voice_value = None
+    init_voice_visible = False
+    init_voice_interactive = True
+    init_ref_visible = False
+    if first_model:
+        for info, _avail in registry.list_models():
+            if info.model_id == first_model:
+                if info.available_voices:
+                    init_voice_choices = info.available_voices
+                    init_voice_value = info.available_voices[0]
+                    init_voice_visible = True
+                else:
+                    init_voice_choices = ["(no presets — use reference audio)"]
+                    init_voice_visible = True
+                    init_voice_interactive = False
+                init_ref_visible = info.supports_voice_cloning
+                break
 
     with gr.Row():
         with gr.Column(scale=1):
@@ -117,23 +138,24 @@ def build_playground_tab():
                 label="Model",
                 info="Select a TTS model. Models are loaded on first use.",
                 choices=choices,
-                value=choices[0][1] if choices else None,
+                value=first_model,
                 interactive=True,
                 elem_id="pg_model",
             )
             model_info = gr.Markdown(
-                value=_get_model_info(choices[0][1]) if choices else "",
+                value=_get_model_info(first_model) if first_model else "",
                 elem_classes=["model-info-card"],
             )
             voice_dropdown = gr.Dropdown(
                 label="Voice preset",
                 info="Preset voice for this model. Not all models have presets.",
-                choices=[],
-                visible=False,
-                interactive=True,
+                choices=init_voice_choices,
+                value=init_voice_value,
+                visible=init_voice_visible,
+                interactive=init_voice_interactive,
                 elem_id="pg_voice",
             )
-            ref_audio_group = gr.Group(visible=False)
+            ref_audio_group = gr.Group(visible=init_ref_visible)
             with ref_audio_group:
                 ref_audio = gr.Audio(
                     label="Reference audio — upload 3-10s for voice cloning",

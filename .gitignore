@@ -7,3 +7,6 @@ __pycache__/
 endpoints.json
 profiles.json
 settings.json
+.playwright-mcp/
+demo/screenshots/
+demo/frames.txt

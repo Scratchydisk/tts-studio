@@ -247,7 +247,7 @@ def build_voice_profiles_tab():
                 label="Test text",
                 placeholder="Enter text to preview the voice...",
                 lines=3,
-                value="The quick brown fox jumps over the lazy dog.",
+                value="The north wind and the sun were disputing which was the stronger, when a traveller came along wrapped in a warm cloak.",
             )
             with gr.Row():
                 test_btn = gr.Button("Test Voice", variant="secondary")

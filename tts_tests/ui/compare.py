@@ -62,7 +62,7 @@ def build_compare_tab():
         label="Text to synthesise",
         placeholder="Enter text here...",
         lines=3,
-        value="The quick brown fox jumps over the lazy dog.",
+        value="The north wind and the sun were disputing which was the stronger, when a traveller came along wrapped in a warm cloak.",
         info="Both models will generate speech from this text.",
     )
 

@@ -240,12 +240,35 @@ Dia requires >= 10 GB VRAM (float32 only — produces garbage at half precision)
 }
 ```
 
+### Orpheus-3B remote server
+
+Orpheus uses vLLM internally for inference and a SNAC decoder for audio. TTS Studio includes a bundled worker (`workers/orpheus_worker.py`) that can be started from the **Models** tab, or run manually:
+
+```bash
+# Install orpheus-speech into the vLLM venv
+~/vllm-env/bin/pip install orpheus-speech
+
+# Start the worker
+~/vllm-env/bin/python workers/orpheus_worker.py --port 8001 --gpu 0
+```
+
+Orpheus requires ~7 GB VRAM. The worker exposes an OpenAI-compatible `/v1/audio/speech` endpoint.
+
+```json
+{
+    "orpheus-3b": {
+        "url": "http://your-server:8001/v1",
+        "model": "canopylabs/orpheus-3b-0.1-ft"
+    }
+}
+```
+
 ### Limitations
 
 - **Voice cloning via reference audio** is not yet supported through vLLM's HTTP API for Voxtral. Use the Voxtral worker (start it from the Models tab) for voice cloning support.
 - vLLM serves **one model per process**. For multiple models, run separate processes on different ports.
 
-See `docs/remote-models.md` for more detailed setup notes.
+See [docs/remote-models.md](docs/remote-models.md) for more detailed setup notes.
 
 ## External integration
 
@@ -312,3 +335,12 @@ endpoints.json        # Remote endpoint config (create from endpoints.json.examp
 profiles.json         # Voice profiles (user-created)
 run.sh                # Quick-start script
 ```
+
+## Author's observations
+
+Informal notes from testing these models. Your mileage may vary depending on hardware, reference audio quality, and text content.
+
+- **Chatterbox** produces voice cloning quality roughly on par with Qwen3-TTS Clone, despite being a much smaller model (350M vs 1.7B). It's noticeably faster too. The trade-off is that Chatterbox has no preset voices — you always need a reference audio clip.
+- **Qwen3-TTS** is the best all-rounder for preset voices. The Eric and Vivian presets are particularly natural. The Clone variant is solid for voice cloning but slower than Chatterbox at inference.
+- **Kokoro** is excellent for its size — 82M parameters with surprisingly good quality and very fast inference. Best choice when VRAM is tight or you need high throughput.
+- **Voxtral** has the widest language coverage (9 languages, 20 voices) but requires a beefy GPU (~16 GB) and runs best via vLLM on a dedicated server.

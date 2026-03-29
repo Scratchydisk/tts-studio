@@ -197,9 +197,16 @@ _VLLM_MODEL_DEFAULTS = {
         "args": [],
         "worker": "voxtral",
     },
+    "orpheus-3b": {
+        "model": "canopylabs/orpheus-3b-0.1-ft",
+        "port": 8001,
+        "gpu": 0,
+        "args": [],
+        "worker": "orpheus",
+    },
     "qwen3-tts-1.7b": {
         "model": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
-        "port": 8001,
+        "port": 8002,
         "gpu": 0,
         "args": ["--omni", "--gpu-memory-utilization", "0.95", "--enforce-eager"],
     },
@@ -340,10 +347,10 @@ def _start_vllm_server(model_id: str):
     registry.unload_current()
 
     # Build command based on worker type
-    if worker_type == "voxtral":
-        worker_script = str(_project_root / "workers" / "voxtral_worker.py")
+    if worker_type in ("voxtral", "orpheus"):
+        worker_script = str(_project_root / "workers" / f"{worker_type}_worker.py")
         cmd = [python, worker_script, "--port", str(port), "--gpu", str(gpu)]
-        display_cmd = f"python workers/voxtral_worker.py --port {port} --gpu {gpu}"
+        display_cmd = f"python workers/{worker_type}_worker.py --port {port} --gpu {gpu}"
     else:
         # Use the vllm-omni binary from the venv (the module has no __main__
         # block so -m invocation silently exits).
@@ -468,6 +475,19 @@ def build_model_management_tab():
 
     model_table = gr.Markdown(value=_build_model_table)
 
+    # --- Restart server (always visible) ---
+    with gr.Row():
+        restart_btn = gr.Button(
+            "Restart Server",
+            variant="secondary",
+        )
+        restart_status = gr.Markdown()
+
+    def _restart():
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    restart_btn.click(fn=_restart)
+
     # --- Install a model (most common action, so it's first) ---
     gr.Markdown("### Install a model")
     gr.Markdown(
@@ -488,31 +508,19 @@ def build_model_management_tab():
 
     install_log = gr.Code(label="Install log", language="shell", lines=15, max_lines=15)
 
-    restart_btn = gr.Button(
-        "Restart App",
-        variant="secondary",
-        visible=False,
-    )
-
     def _install_and_refresh(model_id):
         for output in _install_model(model_id):
             yield (
                 output,
                 gr.update(choices=_get_installable_models(), value=None),
                 _build_model_table(),
-                gr.update(visible=_needs_restart),
             )
 
     install_btn.click(
         fn=_install_and_refresh,
         inputs=[install_dropdown],
-        outputs=[install_log, install_dropdown, model_table, restart_btn],
+        outputs=[install_log, install_dropdown, model_table],
     )
-
-    def _restart():
-        os.execv(sys.executable, [sys.executable] + sys.argv)
-
-    restart_btn.click(fn=_restart)
 
     # --- GPU assignment ---
     if len(gpus) > 1:
@@ -646,31 +654,17 @@ def build_model_management_tab():
     # Server status table
     server_status = gr.Markdown(value=_build_server_status)
 
-    # Add/configure server
-    gr.Markdown("#### Configure a server")
-    with gr.Row():
-        srv_model_id = gr.Textbox(
-            label="Model ID (for endpoints.json)",
-            placeholder="e.g. voxtral-4b",
-        )
-        srv_hf_model = gr.Textbox(
-            label="HuggingFace model name",
-            placeholder="e.g. mistralai/Voxtral-4B-TTS-2603",
-        )
-    with gr.Row():
-        srv_port = gr.Number(label="Port", value=8000, precision=0, info="Port for the vLLM API server.")
-        srv_gpu = gr.Number(label="GPU index", value=0, precision=0, info="Which GPU to run this server on.")
-        srv_extra_args = gr.Textbox(
-            label="Extra args",
-            placeholder="--omni --trust-remote-code --enforce-eager",
-            value="--omni --trust-remote-code --enforce-eager",
-            info="Additional command-line arguments for vLLM.",
-        )
-    srv_save_btn = gr.Button("Save Server Config", variant="primary")
-    srv_config_status = gr.Markdown()
-
-    # Start / stop controls
-    gr.Markdown("#### Start / stop")
+    # --- Start / stop controls (most common action, so it's first) ---
+    gr.Markdown("#### Start / stop a model server")
+    gr.Markdown(
+        "Large models (Voxtral, Orpheus, Qwen3-TTS) can run as dedicated server "
+        "processes using vLLM or a bundled worker. Select a model below and click "
+        "**Start** to launch it. The server exposes an OpenAI-compatible API that "
+        "TTS Studio connects to automatically.\n\n"
+        "**Note:** Each server uses significant GPU memory. On most setups you "
+        "should only run **one server at a time** — stop the current one before "
+        "starting another."
+    )
 
     def _server_choices():
         servers = get_vllm_servers()
@@ -686,6 +680,35 @@ def build_model_management_tab():
         srv_start_btn = gr.Button("Start", variant="primary")
         srv_stop_btn = gr.Button("Stop", variant="stop")
         srv_refresh_btn = gr.Button("Refresh Status", variant="secondary")
+
+    srv_log = gr.Code(label="Server log", language="shell", lines=15, max_lines=15)
+
+    # --- Configure a server (advanced, below start/stop) ---
+    with gr.Accordion("Configure a server", open=False):
+        gr.Markdown(
+            "Add or edit server configurations. Pre-configured servers for "
+            "Voxtral, Orpheus, and Qwen3-TTS are seeded automatically."
+        )
+        with gr.Row():
+            srv_model_id = gr.Textbox(
+                label="Model ID (for endpoints.json)",
+                placeholder="e.g. voxtral-4b",
+            )
+            srv_hf_model = gr.Textbox(
+                label="HuggingFace model name",
+                placeholder="e.g. mistralai/Voxtral-4B-TTS-2603",
+            )
+        with gr.Row():
+            srv_port = gr.Number(label="Port", value=8000, precision=0, info="Port for the vLLM API server.")
+            srv_gpu = gr.Number(label="GPU index", value=0, precision=0, info="Which GPU to run this server on.")
+            srv_extra_args = gr.Textbox(
+                label="Extra args",
+                placeholder="--omni --trust-remote-code --enforce-eager",
+                value="--omni --trust-remote-code --enforce-eager",
+                info="Additional command-line arguments for vLLM.",
+            )
+        srv_save_btn = gr.Button("Save Server Config", variant="primary")
+        srv_config_status = gr.Markdown()
 
     # Wire save button (after srv_select is defined)
     def _save_server_config(model_id, hf_model, port, gpu, extra_args):
@@ -712,8 +735,6 @@ def build_model_management_tab():
         inputs=[srv_model_id, srv_hf_model, srv_port, srv_gpu, srv_extra_args],
         outputs=[srv_config_status, server_status, srv_select],
     )
-
-    srv_log = gr.Code(label="Server log", language="shell", lines=15, max_lines=15)
 
     def _start_and_update(model_id):
         for output in _start_vllm_server(model_id):
