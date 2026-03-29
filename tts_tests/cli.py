@@ -12,6 +12,8 @@ import argparse
 import logging
 import sys
 
+import gradio as gr
+
 logger = logging.getLogger(__name__)
 
 
@@ -58,11 +60,42 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             status = "local"
         logger.info("  %-20s %s", info.name, status)
 
+    theme = gr.themes.Soft(
+        primary_hue=gr.themes.colors.blue,
+        secondary_hue=gr.themes.colors.slate,
+        neutral_hue=gr.themes.colors.slate,
+        font=[gr.themes.GoogleFont("Source Sans 3"), "system-ui", "sans-serif"],
+        font_mono=[gr.themes.GoogleFont("Source Code Pro"), "monospace"],
+    )
+
+    css = """
+    /* Row-level highlight on dataframe hover */
+    .gradio-dataframe tbody tr:hover { background: var(--color-accent-soft) !important; cursor: pointer; }
+    .gradio-dataframe tbody tr td { transition: background 0.15s ease; }
+
+    /* Tighter model-info card */
+    .model-info-card { padding: 12px 16px; border-radius: 8px;
+        background: var(--block-background-fill); border: 1px solid var(--border-color-primary); }
+    .model-info-card p { margin: 2px 0 !important; }
+
+    /* Button group spacing — separate primary actions from secondary */
+    .action-buttons { gap: 8px !important; }
+    .action-buttons .secondary { margin-left: auto !important; }
+
+    /* Status area */
+    .status-msg { min-height: 2em; }
+
+    /* Legend as a quiet subtitle */
+    .icon-legend { opacity: 0.65; font-size: 0.85em; }
+    """
+
     app = build_app()
     app.launch(
         server_name=args.host,
         server_port=args.port,
         share=args.share,
+        theme=theme,
+        css=css,
     )
     return 0
 

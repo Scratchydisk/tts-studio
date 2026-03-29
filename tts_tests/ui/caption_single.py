@@ -13,6 +13,7 @@ from tts_tests.caption.srt_parser import parse_srt_file
 from tts_tests.caption.tts_bridge import generate_single_caption
 from tts_tests.config import OUTPUT_DIR, get_device
 from tts_tests.profiles import VoiceProfile, get_profile, list_profiles
+from tts_tests.ui.shared import get_model_choices
 
 
 def _get_profile_choices() -> list[tuple[str, str]]:
@@ -20,27 +21,6 @@ def _get_profile_choices() -> list[tuple[str, str]]:
     profiles = list_profiles()
     choices = [(name, name) for name in profiles]
     choices.append(("Custom...", "__custom__"))
-    return choices
-
-
-def _get_model_choices() -> list[tuple[str, str]]:
-    """Return (display_label, model_id) for the dropdown."""
-    choices = []
-    for info, available in registry.list_models():
-        label = info.name
-        icons = ""
-        if info.available_voices:
-            icons += "\U0001f5e3 "
-        if info.supports_voice_cloning:
-            icons += "\U0001f3a4 "
-        label = icons + label
-        if not available:
-            label += " (not installed)"
-        elif registry.is_remote(info.model_id):
-            label += " (remote)"
-        else:
-            label += " (local)"
-        choices.append((label, info.model_id))
     return choices
 
 
@@ -148,6 +128,14 @@ def _build_tts_config(
     )
 
 
+def _get_intermediates_dir(video_file) -> Path | None:
+    """Get the intermediates directory for the current video."""
+    if video_file is None:
+        return None
+    video_path = Path(video_file)
+    return video_path.parent / f"{video_path.stem}_intermediates"
+
+
 def _preview_caption(
     profile_name: str,
     custom_model: str | None,
@@ -156,8 +144,13 @@ def _preview_caption(
     custom_ref_text: str,
     caption_table: pd.DataFrame,
     caption_index: int,
+    video_file,
+    pin_preview: bool,
 ) -> tuple:
     """Preview audio for a single caption row.
+
+    If pin_preview is True and a video file is loaded, saves the audio to
+    the intermediates directory so it will be reused during rendering.
 
     Returns (audio_tuple, status_text).
     """
@@ -190,7 +183,37 @@ def _preview_caption(
     except Exception as e:
         return None, f"Generation failed: {e}"
 
-    return (sr, audio), f"Preview for caption {idx}: \"{text[:60]}...\""
+    status = f"Preview for caption {idx}: \"{text[:60]}...\""
+
+    # Pin to intermediates if requested
+    if pin_preview and video_file is not None:
+        intermediates = _get_intermediates_dir(video_file)
+        if intermediates:
+            intermediates.mkdir(parents=True, exist_ok=True)
+            wav_path = intermediates / f"speech_{idx:03d}.wav"
+            import soundfile as sf
+            sf.write(str(wav_path), audio, sr)
+            status += f" **Pinned** — will be used in render."
+
+    return (sr, audio), status
+
+
+def _unpin_caption(video_file, caption_index: int) -> str:
+    """Remove a pinned preview so it will be regenerated during render."""
+    if video_file is None:
+        return "No video file loaded."
+    try:
+        idx = int(caption_index)
+    except (TypeError, ValueError):
+        return "Invalid caption index."
+
+    intermediates = _get_intermediates_dir(video_file)
+    if intermediates:
+        wav_path = intermediates / f"speech_{idx:03d}.wav"
+        if wav_path.exists():
+            wav_path.unlink()
+            return f"Caption {idx} unpinned — will be regenerated during render."
+    return f"Caption {idx} was not pinned."
 
 
 def _render_video(
@@ -248,96 +271,168 @@ def _render_video(
     return str(result_path), f"Rendering complete. Output saved to `{result_path}`"
 
 
+def _save_srt(caption_table: pd.DataFrame, srt_file) -> str:
+    """Save edited captions back to the SRT file."""
+    if caption_table is None or caption_table.empty:
+        return "No captions to save."
+    if srt_file is None:
+        return "No SRT file loaded."
+
+    srt_path = Path(srt_file)
+
+    def _fmt_time(seconds: float) -> str:
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        s = int(seconds % 60)
+        ms = int((seconds % 1) * 1000)
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    lines = []
+    for i, row in caption_table.iterrows():
+        idx = int(row["Index"]) + 1  # SRT is 1-indexed
+        start = float(row["Start"])
+        end = float(row["End"])
+        text = str(row["Text"])
+        lines.append(str(idx))
+        lines.append(f"{_fmt_time(start)} --> {_fmt_time(end)}")
+        lines.append(text)
+        lines.append("")
+
+    srt_path.write_text("\n".join(lines), encoding="utf-8")
+    return f"Captions saved to `{srt_path.name}`."
+
+
 def build_caption_single_tab():
     profile_choices = _get_profile_choices()
-    model_choices = _get_model_choices()
+    model_choices = get_model_choices()
 
     with gr.Row():
         with gr.Column(scale=1):
-            gr.Markdown("### Voice settings")
-            profile_dropdown = gr.Dropdown(
-                label="Voice profile",
-                choices=profile_choices,
-                value=profile_choices[0][1] if len(profile_choices) > 1 else "__custom__",
-                interactive=True,
-            )
+            with gr.Accordion("Voice Settings", open=True):
+                profile_dropdown = gr.Dropdown(
+                    label="Voice profile",
+                    choices=profile_choices,
+                    value=profile_choices[0][1] if len(profile_choices) > 1 else "__custom__",
+                    interactive=True,
+                    info="Select a saved voice profile, or choose Custom to configure manually.",
+                )
 
-            custom_group = gr.Group(
-                visible=(len(profile_choices) <= 1),
-            )
-            with custom_group:
-                custom_model = gr.Dropdown(
-                    label="Model",
-                    choices=model_choices,
-                    value=model_choices[0][1] if model_choices else None,
+                custom_group = gr.Group(
+                    visible=(len(profile_choices) <= 1),
+                )
+                with custom_group:
+                    custom_model = gr.Dropdown(
+                        label="Model",
+                        choices=model_choices,
+                        value=model_choices[0][1] if model_choices else None,
+                        interactive=True,
+                    )
+                    custom_voice = gr.Dropdown(
+                        label="Voice preset",
+                        choices=[],
+                        visible=False,
+                        interactive=True,
+                    )
+                    custom_ref_group = gr.Group(visible=False)
+                    with custom_ref_group:
+                        custom_ref_audio = gr.Audio(
+                            label="Reference audio (for voice cloning)",
+                            type="filepath",
+                        )
+                        custom_ref_text = gr.Textbox(
+                            label="Reference audio transcript",
+                            placeholder="Transcript of the reference audio...",
+                        )
+
+            with gr.Accordion("Output Settings", open=False):
+                silence_before = gr.Slider(
+                    label="Silence before caption (seconds)",
+                    minimum=0.0,
+                    maximum=2.0,
+                    step=0.05,
+                    value=0.3,
+                    info="Padding added before each speech segment.",
+                )
+                silence_after = gr.Slider(
+                    label="Silence after caption (seconds)",
+                    minimum=0.0,
+                    maximum=2.0,
+                    step=0.05,
+                    value=0.5,
+                    info="Padding added after each speech segment.",
+                )
+                output_format = gr.Dropdown(
+                    label="Output format",
+                    choices=["mkv", "mp4", "webm"],
+                    value="mkv",
                     interactive=True,
                 )
-                custom_voice = gr.Dropdown(
-                    label="Voice preset",
-                    choices=[],
-                    visible=False,
-                    interactive=True,
-                )
-                custom_ref_group = gr.Group(visible=False)
-                with custom_ref_group:
-                    custom_ref_audio = gr.Audio(
-                        label="Reference audio (for voice cloning)",
-                        type="filepath",
-                    )
-                    custom_ref_text = gr.Textbox(
-                        label="Reference audio transcript",
-                        placeholder="Transcript of the reference audio...",
-                    )
-
-            gr.Markdown("### Output settings")
-            silence_before = gr.Slider(
-                label="Silence before caption (seconds)",
-                minimum=0.0,
-                maximum=2.0,
-                step=0.05,
-                value=0.3,
-            )
-            silence_after = gr.Slider(
-                label="Silence after caption (seconds)",
-                minimum=0.0,
-                maximum=2.0,
-                step=0.05,
-                value=0.5,
-            )
-            output_format = gr.Dropdown(
-                label="Output format",
-                choices=["mkv", "mp4", "webm"],
-                value="mkv",
-                interactive=True,
-            )
 
         with gr.Column(scale=2):
             gr.Markdown("### Input files")
             video_input = gr.File(
-                label="Video file",
+                label="Video file — the video to narrate",
                 file_types=["video"],
             )
             srt_input = gr.File(
-                label="SRT subtitle file",
+                label="SRT subtitle file — SubRip file with caption timing",
                 file_types=[".srt"],
             )
             parse_btn = gr.Button("Parse SRT")
             caption_table = gr.Dataframe(
                 headers=["Index", "Start", "End", "Text"],
-                interactive=False,
-                label="Captions",
+                interactive=True,
+                label="Captions — click a row to select it, edit text directly",
+                column_widths=["60px", "70px", "70px", None],
             )
-
-            gr.Markdown("### Caption preview")
             with gr.Row():
-                preview_index = gr.Number(
-                    label="Caption index",
-                    value=0,
-                    precision=0,
+                save_srt_btn = gr.Button(
+                    "Save Captions to SRT",
+                    variant="secondary",
+                    size="sm",
                 )
-                preview_btn = gr.Button("Preview Caption")
-            preview_audio = gr.Audio(label="Caption preview", type="numpy")
-            preview_status = gr.Markdown()
+            save_srt_status = gr.Markdown()
+
+            with gr.Accordion("Preview & Pin", open=False):
+                with gr.Row():
+                    preview_index = gr.Number(
+                        label="Caption index",
+                        value=0,
+                        precision=0,
+                    )
+                    pin_checkbox = gr.Checkbox(
+                        label="Pin for render",
+                        value=True,
+                        info="Pin this take so it won't be regenerated during render.",
+                    )
+                with gr.Row():
+                    preview_btn = gr.Button("Preview Caption", variant="primary")
+                    unpin_btn = gr.Button("Unpin", variant="secondary", size="sm")
+                preview_audio = gr.Audio(label="Caption preview", type="numpy")
+                preview_status = gr.Markdown()
+
+            with gr.Accordion("Speech tips", open=False):
+                gr.Markdown(
+                    "**Controlling pauses and style:**\n\n"
+                    "Most TTS models respond to natural punctuation:\n"
+                    "- **Commas** `,` — short pause\n"
+                    "- **Periods** `.` — longer pause\n"
+                    "- **Ellipsis** `...` — drawn-out pause\n"
+                    "- **Dashes** `—` or `--` — mid-sentence break\n"
+                    "- **Question marks / exclamation** — affects intonation\n\n"
+                    "**Model-specific features:**\n\n"
+                    "- **Dia-1.6B:** Speaker tags `[S1]`, `[S2]` for dialogue. "
+                    "Emotion markers like `(laughs)`, `(sighs)` in the text.\n"
+                    "- **Chatterbox:** Supports emotion exaggeration control.\n"
+                    "- **Zonos:** Fine-grained prosody via 10–30s reference audio.\n"
+                    "- **Voice cloning models** (🎤): Match the speaking style "
+                    "of your reference audio — a slow, calm reference produces "
+                    "slow, calm output.\n\n"
+                    "**General tips:**\n"
+                    "- Split long sentences across multiple captions\n"
+                    "- Use short, clear sentences for best results\n"
+                    "- Preview individual captions before rendering"
+                )
 
             gr.Markdown("### Render")
             render_btn = gr.Button(
@@ -372,6 +467,23 @@ def build_caption_single_tab():
         outputs=[caption_table],
     )
 
+    # Save edited captions
+    save_srt_btn.click(
+        fn=_save_srt,
+        inputs=[caption_table, srt_input],
+        outputs=[save_srt_status],
+    )
+
+    # Table row select → set caption index
+    def _on_caption_select(evt: gr.SelectData):
+        row_idx = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+        return row_idx
+
+    caption_table.select(
+        fn=_on_caption_select,
+        outputs=[preview_index],
+    )
+
     # Preview caption
     preview_btn.click(
         fn=_preview_caption,
@@ -379,8 +491,16 @@ def build_caption_single_tab():
             profile_dropdown, custom_model, custom_voice,
             custom_ref_audio, custom_ref_text,
             caption_table, preview_index,
+            video_input, pin_checkbox,
         ],
         outputs=[preview_audio, preview_status],
+    )
+
+    # Unpin caption
+    unpin_btn.click(
+        fn=_unpin_caption,
+        inputs=[video_input, preview_index],
+        outputs=[preview_status],
     )
 
     # Render video

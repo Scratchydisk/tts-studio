@@ -72,7 +72,8 @@ class VoxtralTTS(TTSModel):
             native_sample_rate=24000,
             description=(
                 "Mistral's 4B param TTS model. 9 languages, 20 preset voices, "
-                "voice cloning from ~3s of reference audio. Runs via remote vLLM server."
+                "voice cloning from ~3s of reference audio. Runs via vLLM worker "
+                "(start from Models tab)."
             ),
         )
 

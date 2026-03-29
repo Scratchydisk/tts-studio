@@ -1,7 +1,9 @@
 venv/
 output/
+reference_audio/
 __pycache__/
 *.egg-info/
 .eggs/
 endpoints.json
 profiles.json
+settings.json

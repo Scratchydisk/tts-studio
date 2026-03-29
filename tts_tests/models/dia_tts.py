@@ -7,6 +7,8 @@ import numpy as np
 
 from tts_tests.base import ModelInfo, TTSModel, TTSResult
 
+PIP_EXTRA = "dia"
+
 
 def is_available() -> bool:
     try:

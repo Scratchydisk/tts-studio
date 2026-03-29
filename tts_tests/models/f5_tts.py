@@ -9,6 +9,8 @@ import soundfile as sf
 
 from tts_tests.base import ModelInfo, TTSModel, TTSResult
 
+PIP_EXTRA = "f5tts"
+
 
 def is_available() -> bool:
     try:
@@ -111,12 +113,18 @@ class F5TTS(TTSModel):
             reference_audio = Path(reference_audio)
 
         ref_file = _ensure_wav(reference_audio)
+        is_temp = ref_file != str(reference_audio)
 
-        wav, sr, _ = self._model.infer(
-            ref_file=ref_file,
-            ref_text=reference_text or "",
-            gen_text=text,
-        )
+        try:
+            wav, sr, _ = self._model.infer(
+                ref_file=ref_file,
+                ref_text=reference_text or "",
+                gen_text=text,
+            )
+        finally:
+            if is_temp:
+                import os
+                os.unlink(ref_file)
 
         elapsed = time.perf_counter() - start
         audio = np.array(wav).flatten().astype(np.float32)

@@ -116,6 +116,7 @@ def build_caption_batch_tab():
             input_dir = gr.Textbox(
                 label="Input directory",
                 placeholder="/path/to/videos/",
+                info="Directory containing video files and matching .srt files.",
             )
             browse_file = gr.File(
                 label="Or pick any file in the target directory",
@@ -128,6 +129,7 @@ def build_caption_batch_tab():
                 value="*.mp4",
                 allow_custom_value=True,
                 interactive=True,
+                info="Glob pattern to match video files.",
             )
             profile_dropdown = gr.Dropdown(
                 label="Voice profile",
@@ -138,12 +140,14 @@ def build_caption_batch_tab():
                     else "__custom__"
                 ),
                 interactive=True,
+                info="Voice profile to use for all videos in the batch.",
             )
             output_format = gr.Dropdown(
                 label="Output format",
                 choices=["mkv", "mp4", "webm"],
                 value="mkv",
                 interactive=True,
+                info="Container format for the output videos.",
             )
             start_btn = gr.Button("Start Batch", variant="primary", size="lg")
 

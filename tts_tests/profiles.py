@@ -25,7 +25,28 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-PROFILES_FILE = Path(__file__).parent.parent / "profiles.json"
+_PROJECT_ROOT = Path(__file__).parent.parent
+PROFILES_FILE = _PROJECT_ROOT / "profiles.json"
+
+
+def _to_relative(audio_path: str | None) -> str | None:
+    """Convert an absolute path within the project to a relative path."""
+    if not audio_path:
+        return None
+    try:
+        return str(Path(audio_path).resolve().relative_to(_PROJECT_ROOT.resolve()))
+    except ValueError:
+        return audio_path
+
+
+def _to_absolute(audio_path: str | None) -> str | None:
+    """Resolve a relative path against the project root."""
+    if not audio_path:
+        return None
+    p = Path(audio_path)
+    if p.is_absolute():
+        return audio_path
+    return str(_PROJECT_ROOT / p)
 
 
 def _persist_reference_audio(audio_path: str | None, profile_name: str) -> str | None:
@@ -36,24 +57,33 @@ def _persist_reference_audio(audio_path: str | None, profile_name: str) -> str |
     if not audio_path:
         return None
 
-    src = Path(audio_path)
+    src = Path(audio_path).resolve()
     if not src.exists():
-        return audio_path
-
-    # Check if the file is in a temp directory
-    tmp_markers = ("/tmp/", "/tmp\\")
-    is_temp = any(m in str(src) for m in tmp_markers)
-    if not is_temp:
         return audio_path
 
     from tts_tests.config import PROFILE_AUDIO_DIR
 
-    # Copy to persistent location: ~/.cache/tts-studio/reference_audio/<profile>_<filename>
+    # If already in the reference audio directory, keep as-is
+    try:
+        src.relative_to(PROFILE_AUDIO_DIR.resolve())
+        return audio_path
+    except ValueError:
+        pass
+
+    # Also check relative path form
+    try:
+        src.relative_to(_PROJECT_ROOT.resolve())
+        # Already within the project — keep it
+        return audio_path
+    except ValueError:
+        pass
+
+    # File is outside the project (e.g. /tmp from Gradio upload) — copy it in
     dest_name = f"{profile_name}_{src.name}"
     dest = PROFILE_AUDIO_DIR / dest_name
     shutil.copy2(src, dest)
     logger.info("Copied reference audio to %s", dest)
-    return str(dest)
+    return _to_relative(str(dest))
 
 
 @dataclass
@@ -64,6 +94,7 @@ class VoiceProfile:
     voice: str | None = None
     reference_audio: str | None = None
     reference_text: str | None = None
+    notes: str | None = None
 
 
 def _validate_name(name: str) -> None:
@@ -88,11 +119,11 @@ def _read_profiles_file() -> dict:
 
 
 def _write_profiles_file(data: dict) -> None:
-    """Write the raw JSON data to the profiles file."""
-    PROFILES_FILE.write_text(
-        json.dumps(data, indent=4, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+    """Write the raw JSON data to the profiles file atomically."""
+    content = json.dumps(data, indent=4, ensure_ascii=False) + "\n"
+    tmp = PROFILES_FILE.with_suffix(".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    tmp.rename(PROFILES_FILE)
 
 
 def list_profiles() -> dict[str, VoiceProfile]:
@@ -104,8 +135,9 @@ def list_profiles() -> dict[str, VoiceProfile]:
             profiles[name] = VoiceProfile(
                 model_id=entry["model_id"],
                 voice=entry.get("voice"),
-                reference_audio=entry.get("reference_audio"),
+                reference_audio=_to_absolute(entry.get("reference_audio")),
                 reference_text=entry.get("reference_text"),
+                notes=entry.get("notes"),
             )
         except (KeyError, TypeError) as e:
             logger.warning("Skipping malformed profile %r: %s", name, e)
@@ -137,7 +169,17 @@ def save_profile(name: str, profile: VoiceProfile) -> None:
             voice=profile.voice,
             reference_audio=persisted_audio,
             reference_text=profile.reference_text,
+            notes=profile.notes,
         )
+
+    # Convert to relative path for portability
+    profile = VoiceProfile(
+        model_id=profile.model_id,
+        voice=profile.voice,
+        reference_audio=_to_relative(profile.reference_audio),
+        reference_text=profile.reference_text,
+        notes=profile.notes,
+    )
 
     raw = _read_profiles_file()
     # Strip None values to keep the JSON tidy

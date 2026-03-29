@@ -5,7 +5,9 @@ description = "TTS model testing and caption-to-speech video processing"
 requires-python = ">=3.10"
 dependencies = [
     "gradio>=5.25",
+    "httpx",
     "numpy",
+    "pandas",
     "soundfile",
     "torch>=2.0",
     "torchaudio>=2.0",
@@ -15,14 +17,19 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-f5tts = ["f5-tts"]
+f5tts = ["f5-tts", "pydub"]
 dia = ["nari-tts @ git+https://github.com/nari-labs/dia.git"]
 kokoro = ["kokoro>=0.9.4"]
 orpheus = ["orpheus-speech"]
-sparktts = ["einops", "omegaconf", "transformers>=4.46", "soxr", "safetensors"]
-voxtral-local = ["vllm>=0.18.0", "vllm-omni @ git+https://github.com/vllm-project/vllm-omni.git", "mistral-common>=1.10.0"]
+sparktts = ["einops", "einx", "omegaconf", "transformers>=4.46", "soxr", "safetensors"]
+chatterbox = ["chatterbox-tts", "setuptools<81"]
+qwen3tts = ["qwen-tts"]
+outetts = ["outetts"]
+zonos = ["zonos @ git+https://github.com/Zyphra/Zonos.git"]
+sesame-csm = ["csm @ git+https://github.com/SesameAILabs/csm.git"]
+tada = ["tada @ git+https://github.com/HumeAI/tada.git"]
 piper = ["piper-tts"]
-all = ["tts-studio[f5tts,dia,kokoro,sparktts,orpheus]"]
+all = ["tts-studio[f5tts,dia,kokoro,sparktts,orpheus,outetts]"]
 
 [project.scripts]
 tts-studio = "tts_tests.cli:main"

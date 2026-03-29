@@ -2,13 +2,19 @@
 
 A Gradio web app for testing open-source text-to-speech models and processing caption-to-speech video pipelines. Compare TTS models side by side, manage reusable voice profiles, and batch-process videos with spoken captions.
 
+**Requires Python 3.10–3.12.** Several model dependencies (Kokoro, F5-TTS, etc.) do not yet support Python 3.13.
+
+## Demos
+
+- [Playground walkthrough](docs/playground-demo.md) — generating speech with Qwen3-TTS, narrated by the app itself
+
 ## Quick start
 
 ```bash
 ./run.sh
 ```
 
-This creates a virtual environment, installs dependencies, and launches the web UI at `http://localhost:7860`.
+This creates a virtual environment, installs dependencies, and launches the web UI at `http://localhost:7860`. The server binds to `0.0.0.0` so it's accessible from other machines on the network at `http://<your-ip>:7860`.
 
 ### CLI
 
@@ -28,14 +34,29 @@ tts-studio batch ./videos/ --profile emma
 
 ## Supported models
 
-| Model | Parameters | VRAM | Voice cloning | Preset voices | Sample rate |
-|---|---|---|---|---|---|
-| **Kokoro-82M** | 82M | ~0.5 GB | No | 25 (American/British) | 24 kHz |
-| **Spark-TTS-0.5B** | 0.5B | ~2 GB | Yes | No | 16 kHz |
-| **F5-TTS** | — | ~2.5 GB | Yes | No | 24 kHz |
-| **Orpheus-3B** | 3B | ~7 GB | No | 8 | 24 kHz |
-| **Dia-1.6B** | 1.6B | ~10 GB | No | 2 (multi-speaker) | 44.1 kHz |
-| **Voxtral-4B** | 4B | ~16 GB | Yes (local only) | 20 (9 languages) | 24 kHz |
+Quality tiers: **S** = best-in-class, **A** = excellent, **B** = good, **C** = decent/niche.
+
+| Model | Tier | Params | VRAM | Clone | Voices | Install |
+|---|---|---|---|---|---|---|
+| **Qwen3-TTS-1.7B** | S | 1.7B | ~10 GB | No | 9 | `pip install -e ".[qwen3tts]"` |
+| **Qwen3-TTS-1.7B Clone** | S | 1.7B | ~10 GB | Yes | — | `pip install -e ".[qwen3tts]"` |
+| **Chatterbox** | A | 350M | ~4 GB | Yes | — | `pip install -e ".[chatterbox]"` |
+| **Zonos-v0.1** | A | 1.6B | ~6 GB | Yes (10-30s) | — | `pip install -e ".[zonos]"` |
+| **Sesame CSM-1B** | A | 1.1B | ~4.5 GB | Yes | — | `pip install -e ".[sesame-csm]"` |
+| **TADA-1B** | A | 1B | ~5 GB | Yes | — | `pip install -e ".[tada]"` |
+| **Kokoro-82M** | A | 82M | ~0.5 GB | No | 24 | included in `.[all]` |
+| **F5-TTS** | A | — | ~2.5 GB | Yes | — | included in `.[all]` |
+| **Voxtral-4B** | A | 4B | ~16 GB | Yes* | 20 (9 langs) | remote via vLLM |
+| **Dia-1.6B** | B | 1.6B | ~10 GB | No | 2 | included in `.[all]` |
+| **Orpheus-3B** | B | 3B | ~7 GB | No | 8 | included in `.[all]` |
+| **Spark-TTS-0.5B** | B | 0.5B | ~2 GB | Yes | — | included in `.[all]` |
+| **OuteTTS-0.3-500M** | B | 500M | ~2 GB | Yes | — | `pip install -e ".[outetts]"` |
+
+\* Voxtral voice cloning only works with the local variant, not via the remote API.
+
+Qwen3-TTS ships as two variants sharing the same `.[qwen3tts]` dependency: the **CustomVoice** variant has 9 preset voices but no cloning, while the **Base (Clone)** variant supports voice cloning from reference audio but has no presets.
+
+Models in the `all` group are installed by default with `./run.sh`. Others need their extras group installed separately. Models that aren't installed show as "(not installed)" in the UI.
 
 ## Voice profiles
 
@@ -96,7 +117,7 @@ output:
   format: mkv
 ```
 
-**Requires:** `ffmpeg` on your system PATH.
+**Requires:** `ffmpeg` installed on the server running TTS Studio.
 
 ## Remote models
 
@@ -113,14 +134,118 @@ Any model can be offloaded to a remote server running an OpenAI-compatible TTS A
 
 Models with a configured endpoint show as "(remote)" in the UI. Models without local dependencies or a remote endpoint show as "(not installed)".
 
-### Voxtral remote server setup
+### Setting up a vLLM remote server
+
+vLLM with the [vllm-omni](https://github.com/vllm-project/vllm-omni) extension can serve TTS models with an OpenAI-compatible API. Currently supported TTS models: **Voxtral-4B**, **Qwen3-TTS**, and **Fish Speech S2 Pro**.
+
+#### 1. Install vLLM and vllm-omni
 
 ```bash
-pip install "vllm>=0.18.0" git+https://github.com/vllm-project/vllm-omni.git
-vllm serve mistralai/Voxtral-4B-TTS-2603 --omni
+# Create a dedicated venv on the server
+python3 -m venv ~/vllm-env && source ~/vllm-env/bin/activate
+
+# Install vllm first, then vllm-omni (order matters — vllm-omni registers
+# as a plugin and must be installed after vllm)
+pip install vllm
+pip install git+https://github.com/vllm-project/vllm-omni.git
 ```
 
-**Note:** Voice cloning via reference audio is not yet supported through the vLLM HTTP API for Voxtral. Use the local variant (`voxtral-4b-local`) for voice cloning.
+If `--omni` is not recognised after installation, uninstall both and reinstall in order:
+
+```bash
+pip uninstall vllm vllm-omni -y
+pip install vllm
+pip install git+https://github.com/vllm-project/vllm-omni.git
+```
+
+#### 2. Download and serve a model
+
+The first run downloads the model weights from HuggingFace automatically.
+
+**Voxtral-4B** (requires >= 16 GB VRAM):
+
+```bash
+vllm serve mistralai/Voxtral-4B-TTS-2603 \
+  --omni \
+  --trust-remote-code \
+  --enforce-eager
+```
+
+**Qwen3-TTS** (requires >= 8 GB VRAM):
+
+```bash
+vllm serve Qwen/Qwen3-TTS-12Hz-1.7B-Base --omni
+```
+
+The server listens on port 8000 by default. Add `--port 8001` to change it.
+
+#### 3. Multi-GPU servers
+
+If you have multiple GPUs, force a specific one:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 CUDA_DEVICE_ORDER=PCI_BUS_ID vllm serve ...
+```
+
+vLLM runs one model per server process. To serve multiple models, start each on a different port.
+
+#### 4. Configure TTS Studio to use the remote model
+
+On the machine running TTS Studio, create `endpoints.json`:
+
+```json
+{
+    "voxtral-4b": {
+        "url": "http://your-server:8000/v1",
+        "model": "mistralai/Voxtral-4B-TTS-2603"
+    }
+}
+```
+
+The `model` field must match the model name the server was started with.
+
+#### 5. Test the connection
+
+```bash
+# Check the server is up
+curl http://your-server:8000/v1/models
+
+# Generate a test clip
+curl -X POST http://your-server:8000/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Hello, this is a test.", "model": "mistralai/Voxtral-4B-TTS-2603", "voice": "neutral_female", "response_format": "wav"}' \
+  --output test.wav
+```
+
+### Dia-1.6B remote server
+
+Dia is not supported by vLLM. Use [Dia-TTS-Server](https://github.com/devnen/Dia-TTS-Server) instead:
+
+```bash
+git clone https://github.com/devnen/Dia-TTS-Server.git
+cd Dia-TTS-Server
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+python server.py
+```
+
+Dia requires >= 10 GB VRAM (float32 only — produces garbage at half precision). The server listens on port 8003 with an OpenAI-compatible API.
+
+```json
+{
+    "dia-1.6b": {
+        "url": "http://your-server:8003/v1",
+        "model": "tts-1"
+    }
+}
+```
+
+### Limitations
+
+- **Voice cloning via reference audio** is not yet supported through vLLM's HTTP API for Voxtral. Use the Voxtral worker (start it from the Models tab) for voice cloning support.
+- vLLM serves **one model per process**. For multiple models, run separate processes on different ports.
+
+See `docs/remote-models.md` for more detailed setup notes.
 
 ## External integration
 

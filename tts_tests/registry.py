@@ -12,20 +12,31 @@ from tts_tests.base import ModelInfo, TTSModel
 
 logger = logging.getLogger(__name__)
 
-# Maps model_id -> (class, is_available, endpoint_config | None)
-_registry: dict[str, tuple[Type[TTSModel], bool, dict | None]] = {}
+# Maps model_id -> (class, locally_installed, endpoint_config | None, pip_extra | None)
+_registry: dict[str, tuple[Type[TTSModel], bool, dict | None, str | None]] = {}
 _loaded_model: TTSModel | None = None
 
 
-def register(cls: Type[TTSModel], available: bool = True, endpoint: dict | None = None) -> None:
+def register(
+    cls: Type[TTSModel],
+    locally_installed: bool = True,
+    endpoint: dict | None = None,
+    pip_extra: str | None = None,
+) -> None:
     """Register a model class."""
     instance = cls()
     model_id = instance.info().model_id
-    _registry[model_id] = (cls, available, endpoint)
+    _registry[model_id] = (cls, locally_installed, endpoint, pip_extra)
 
 
 def discover() -> None:
-    """Auto-discover model modules in tts_tests.models."""
+    """Auto-discover model modules in tts_tests.models.
+
+    Each model module should export:
+        MODEL_CLASS  — a TTSModel subclass
+        is_available() — returns True if local dependencies are installed
+        PIP_EXTRA (optional) — the pyproject.toml extras key for pip install
+    """
     _registry.clear()
     import tts_tests.models as models_pkg
     from tts_tests.config import load_endpoints
@@ -40,22 +51,30 @@ def discover() -> None:
                 instance = cls()
                 model_id = instance.info().model_id
                 endpoint = endpoints.get(model_id)
-
-                # A model is available if it has a remote endpoint OR local deps
                 local_available = mod.is_available()
-                available = local_available or endpoint is not None
-
-                register(cls, available, endpoint)
+                pip_extra = getattr(mod, "PIP_EXTRA", None)
+                register(cls, local_available, endpoint, pip_extra)
         except Exception as e:
             logger.warning("Failed to discover model %s: %s", modname, e)
 
 
 def list_models() -> list[tuple[ModelInfo, bool]]:
-    """Return (ModelInfo, is_available) for all registered models."""
+    """Return (ModelInfo, is_available) for all registered models.
+
+    A model is available if it is installed locally or has a remote endpoint.
+    """
     results = []
-    for cls, available, _endpoint in _registry.values():
+    for cls, locally_installed, endpoint, _pip_extra in _registry.values():
+        available = locally_installed or endpoint is not None
         results.append((cls().info(), available))
     return results
+
+
+def is_installed(model_id: str) -> bool:
+    """Check if a model's local dependencies are installed."""
+    if model_id in _registry:
+        return _registry[model_id][1]
+    return False
 
 
 def is_remote(model_id: str) -> bool:
@@ -69,6 +88,13 @@ def get_endpoint(model_id: str) -> dict | None:
     """Get the remote endpoint config for a model, if any."""
     if model_id in _registry:
         return _registry[model_id][2]
+    return None
+
+
+def get_pip_extra(model_id: str) -> str | None:
+    """Get the pip extras key for installing a model, if any."""
+    if model_id in _registry:
+        return _registry[model_id][3]
     return None
 
 
@@ -91,8 +117,8 @@ def load_model(model_id: str, device: str = "cuda") -> TTSModel:
     if model_id not in _registry:
         raise ValueError(f"Unknown model: {model_id}")
 
-    cls, available, endpoint = _registry[model_id]
-    if not available:
+    cls, installed, endpoint, _pip_extra = _registry[model_id]
+    if not installed and endpoint is None:
         raise RuntimeError(
             f"Model {model_id} dependencies are not installed and no remote endpoint configured. "
             f"Check pyproject.toml for the optional dependency group or add an endpoint to endpoints.json."

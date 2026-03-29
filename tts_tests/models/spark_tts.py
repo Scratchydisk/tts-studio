@@ -35,6 +35,8 @@ def _ensure_repo() -> bool:
         logger.warning("Failed to clone Spark-TTS: %s", e)
         return False
 
+PIP_EXTRA = "sparktts"
+
 
 def is_available() -> bool:
     try:

@@ -15,6 +15,8 @@ VOICES = [
     "bm_daniel", "bm_fable", "bm_george", "bm_lewis",
 ]
 
+PIP_EXTRA = "kokoro"
+
 
 def is_available() -> bool:
     try:

@@ -1,4 +1,4 @@
-"""Orpheus-3B TTS wrapper."""
+"""Chatterbox TTS wrapper (Resemble AI)."""
 
 import time
 from pathlib import Path
@@ -7,41 +7,43 @@ import numpy as np
 
 from tts_tests.base import ModelInfo, TTSModel, TTSResult
 
-VOICES = ["tara", "leah", "jess", "leo", "dan", "mia", "zac", "zoe"]
-
-PIP_EXTRA = "orpheus"
+PIP_EXTRA = "chatterbox"
 
 
 def is_available() -> bool:
     try:
-        import orpheus_tts  # noqa: F401
+        import chatterbox  # noqa: F401
         return True
     except ImportError:
         return False
 
 
-class OrpheusTTS(TTSModel):
+class ChatterboxTTS(TTSModel):
     def __init__(self):
         self._model = None
         self._device = None
 
     def info(self) -> ModelInfo:
         return ModelInfo(
-            name="Orpheus-3B",
-            model_id="orpheus-3b",
-            supports_voice_cloning=False,
-            available_voices=VOICES,
-            estimated_vram_gb=7.0,
+            name="Chatterbox",
+            model_id="chatterbox",
+            supports_voice_cloning=True,
+            supports_emotions=True,
+            available_voices=[],
+            estimated_vram_gb=4.0,
             native_sample_rate=24000,
             description=(
-                "Fine-tuned 3B param model with high quality output. "
-                "Requires vllm. Needs ~7GB VRAM."
+                "350M param voice cloning model by Resemble AI. "
+                "Quality: A — excellent quality, fast, lightweight. "
+                "MIT licence. 23 languages. Emotion exaggeration control. "
+                "Note: requires PyTorch 2.6 — may conflict with newer versions."
             ),
         )
 
     def load(self, device: str = "cuda") -> None:
-        from orpheus_tts import OrpheusModel
-        self._model = OrpheusModel(model_name="canopylabs/orpheus-3b-0.1-ft")
+        from chatterbox.tts import ChatterboxTTS as ChatterboxEngine
+
+        self._model = ChatterboxEngine.from_pretrained(device=device)
         self._device = device
 
     def unload(self) -> None:
@@ -62,30 +64,24 @@ class OrpheusTTS(TTSModel):
         if not self.is_loaded():
             raise RuntimeError("Model not loaded")
 
-        voice = voice or "tara"
         start = time.perf_counter()
 
-        audio_chunks = self._model.generate_speech(
-            prompt=text,
-            voice=voice,
-        )
+        kwargs = {"text": text}
+        if reference_audio:
+            kwargs["audio_prompt_path"] = str(reference_audio)
 
-        chunks = []
-        for chunk in audio_chunks:
-            chunks.append(np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32767.0)
-
-        if not chunks:
-            raise RuntimeError("No audio generated")
-
-        audio = np.concatenate(chunks)
+        wav = self._model.generate(**kwargs)
         elapsed = time.perf_counter() - start
+
+        audio = wav.detach().cpu().numpy().flatten().astype(np.float32)
+        sr = self._model.sr
 
         return TTSResult(
             audio=audio,
-            sample_rate=24000,
-            duration=len(audio) / 24000,
+            sample_rate=sr,
+            duration=len(audio) / sr,
             generation_time=elapsed,
         )
 
 
-MODEL_CLASS = OrpheusTTS
+MODEL_CLASS = ChatterboxTTS

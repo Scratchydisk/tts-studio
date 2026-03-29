@@ -1,5 +1,10 @@
-"""Orpheus-3B TTS wrapper."""
+"""Sesame CSM-1B wrapper.
 
+Sesame CSM has no pip package — install via:
+    pip install git+https://github.com/SesameAILabs/csm.git
+"""
+
+import logging
 import time
 from pathlib import Path
 
@@ -7,41 +12,44 @@ import numpy as np
 
 from tts_tests.base import ModelInfo, TTSModel, TTSResult
 
-VOICES = ["tara", "leah", "jess", "leo", "dan", "mia", "zac", "zoe"]
+logger = logging.getLogger(__name__)
 
-PIP_EXTRA = "orpheus"
+PIP_EXTRA = "sesame-csm"
 
 
 def is_available() -> bool:
     try:
-        import orpheus_tts  # noqa: F401
+        import csm  # noqa: F401
         return True
     except ImportError:
         return False
 
 
-class OrpheusTTS(TTSModel):
+class SesameCSM(TTSModel):
     def __init__(self):
         self._model = None
         self._device = None
 
     def info(self) -> ModelInfo:
         return ModelInfo(
-            name="Orpheus-3B",
-            model_id="orpheus-3b",
+            name="Sesame CSM-1B",
+            model_id="sesame-csm-1b",
             supports_voice_cloning=False,
-            available_voices=VOICES,
-            estimated_vram_gb=7.0,
+            available_voices=[],
+            estimated_vram_gb=4.5,
             native_sample_rate=24000,
             description=(
-                "Fine-tuned 3B param model with high quality output. "
-                "Requires vllm. Needs ~7GB VRAM."
+                "Quality: A — 1.1B param conversational speech model by Sesame. "
+                "Optimised for dialogue with voice cloning via speaker audio samples. "
+                "English only. Apache 2.0 licence. "
+                "Install: pip install git+https://github.com/SesameAILabs/csm.git"
             ),
         )
 
     def load(self, device: str = "cuda") -> None:
-        from orpheus_tts import OrpheusModel
-        self._model = OrpheusModel(model_name="canopylabs/orpheus-3b-0.1-ft")
+        from csm import CSM
+
+        self._model = CSM("sesame/csm-1b", device=device)
         self._device = device
 
     def unload(self) -> None:
@@ -62,30 +70,26 @@ class OrpheusTTS(TTSModel):
         if not self.is_loaded():
             raise RuntimeError("Model not loaded")
 
-        voice = voice or "tara"
         start = time.perf_counter()
 
-        audio_chunks = self._model.generate_speech(
-            prompt=text,
-            voice=voice,
-        )
+        kwargs = {
+            "text": text,
+            "speaker": 0,
+            "context": [],
+        }
 
-        chunks = []
-        for chunk in audio_chunks:
-            chunks.append(np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32767.0)
-
-        if not chunks:
-            raise RuntimeError("No audio generated")
-
-        audio = np.concatenate(chunks)
+        audio_tensor = self._model.generate(**kwargs)
         elapsed = time.perf_counter() - start
+
+        audio = audio_tensor.cpu().numpy().flatten().astype(np.float32)
+        sr = 24000
 
         return TTSResult(
             audio=audio,
-            sample_rate=24000,
-            duration=len(audio) / 24000,
+            sample_rate=sr,
+            duration=len(audio) / sr,
             generation_time=elapsed,
         )
 
 
-MODEL_CLASS = OrpheusTTS
+MODEL_CLASS = SesameCSM

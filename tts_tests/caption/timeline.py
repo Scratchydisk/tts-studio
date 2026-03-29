@@ -14,7 +14,20 @@ def build_render_timeline(
 
     for segment in segments:
         entry = {**segment}
-        screen_dur = _snap_to_frame(segment["screen_duration"], fps)
+        # Snap start and end individually to frame boundaries so the trim
+        # filter in ffmpeg produces exactly the expected number of frames.
+        # Previously we snapped only the *difference*, which could diverge
+        # from ffmpeg's actual frame count by ±1 frame per segment,
+        # accumulating into noticeable audio/video drift.
+        render_start = _snap_to_frame(segment["start"], fps)
+        render_end = _snap_to_frame(segment["end"], fps)
+        screen_dur = round(render_end - render_start, 6)
+        if screen_dur <= 0:
+            screen_dur = 1.0 / fps
+            render_end = render_start + screen_dur
+
+        entry["render_start"] = render_start
+        entry["render_end"] = render_end
 
         if not segment["has_speech"]:
             entry["output_duration"] = screen_dur

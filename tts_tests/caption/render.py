@@ -34,7 +34,7 @@ def build_audio_track(
         with wave.open(str(wav_path), "rb") as wf:
             speech_data = wf.readframes(wf.getnframes())
 
-        offset_frames = int(entry["audio_offset"] * sample_rate)
+        offset_frames = round(entry["audio_offset"] * sample_rate)
         offset_bytes = offset_frames * sample_width * channels
         end_bytes = offset_bytes + len(speech_data)
 
@@ -58,12 +58,12 @@ def build_video_filter(timeline: list[dict], fps: int = 25) -> str:
 
     for i, entry in enumerate(timeline):
         label = f"v{i}"
-        start = entry["start"]
-        end = entry["end"]
-        trim = f"[0:v]trim={start}:{end},setpts=PTS-STARTPTS"
+        start = entry["render_start"]
+        end = entry["render_end"]
+        trim = f"[0:v]trim={start}:{end},setpts=PTS-STARTPTS,fps={fps}"
 
         if entry["freeze_duration"] > 0:
-            trim += f",fps={fps},tpad=stop_duration={entry['freeze_duration']}:stop_mode=clone"
+            trim += f",tpad=stop_duration={entry['freeze_duration']}:stop_mode=clone"
 
         parts.append(f"{trim}[{label}]")
         labels.append(f"[{label}]")

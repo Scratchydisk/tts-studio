@@ -7,25 +7,7 @@ import soundfile as sf
 
 from tts_tests import registry
 from tts_tests.config import OUTPUT_DIR, get_device
-
-
-def _get_model_choices() -> list[tuple[str, str]]:
-    choices = []
-    for info, available in registry.list_models():
-        if available:
-            label = info.name
-            icons = ""
-            if info.available_voices:
-                icons += "\U0001f5e3 "
-            if info.supports_voice_cloning:
-                icons += "\U0001f3a4 "
-            label = icons + label
-            if registry.is_remote(info.model_id):
-                label += " (remote)"
-            else:
-                label += " (local)"
-            choices.append((label, info.model_id))
-    return choices
+from tts_tests.ui.shared import get_model_choices
 
 
 def _generate_for_model(model_id: str, text: str, ref_audio_path: str | None, ref_text: str):
@@ -36,7 +18,7 @@ def _generate_for_model(model_id: str, text: str, ref_audio_path: str | None, re
         return None, "No model selected."
 
     try:
-        device = get_device()
+        device = get_device(model_id)
         model = registry.load_model(model_id, device=device)
     except Exception as e:
         return None, f"Load failed: {e}"
@@ -64,26 +46,29 @@ def _generate_for_model(model_id: str, text: str, ref_audio_path: str | None, re
 
 def _generate_both(model_a: str, model_b: str, text: str, ref_audio: str | None, ref_text: str):
     """Generate sequentially for both models, yielding status updates."""
-    yield None, "Loading model A (downloading if needed)...", None, "Waiting..."
+    model_a_name = model_a or "Model A"
+    model_b_name = model_b or "Model B"
+    yield None, f"Generating with **{model_a_name}**...", None, "Waiting..."
     audio_a, status_a = _generate_for_model(model_a, text, ref_audio, ref_text)
-    yield audio_a, status_a, None, "Loading model B (downloading if needed)..."
+    yield audio_a, status_a, None, f"Generating with **{model_b_name}**..."
     audio_b, status_b = _generate_for_model(model_b, text, ref_audio, ref_text)
-    yield audio_a, status_a, audio_b, status_b
+    yield audio_a, f"Done — {status_a}", audio_b, f"Done — {status_b}"
 
 
 def build_compare_tab():
-    choices = _get_model_choices()
+    choices = get_model_choices(include_unavailable=False)
 
     text_input = gr.Textbox(
         label="Text to synthesise",
         placeholder="Enter text here...",
         lines=3,
         value="The quick brown fox jumps over the lazy dog.",
+        info="Both models will generate speech from this text.",
     )
 
     with gr.Row():
         ref_audio = gr.Audio(
-            label="Reference audio (optional, for voice cloning models)",
+            label="Reference audio — optional, for voice cloning models",
             type="filepath",
         )
         ref_text = gr.Textbox(
@@ -101,6 +86,7 @@ def build_compare_tab():
                 label="Model A",
                 choices=choices,
                 value=choices[0][1] if choices else None,
+                info="Select a model for comparison.",
             )
             audio_a = gr.Audio(label="Model A Output", type="numpy")
             status_a = gr.Markdown()
@@ -110,6 +96,7 @@ def build_compare_tab():
                 label="Model B",
                 choices=choices,
                 value=choices[1][1] if len(choices) > 1 else (choices[0][1] if choices else None),
+                info="Select a model for comparison.",
             )
             audio_b = gr.Audio(label="Model B Output", type="numpy")
             status_b = gr.Markdown()
@@ -131,3 +118,5 @@ def build_compare_tab():
         outputs=[audio_a, status_a, audio_b, status_b],
         cancels=[gen_event],
     )
+
+    return model_a, model_b

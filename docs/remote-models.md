@@ -143,7 +143,7 @@ rsync -av --exclude venv --exclude output --exclude __pycache__ /path/to/tts-stu
 cd ~/tts-studio && ./run.sh
 ```
 
-Access the UI at `http://your-server:7860`. All models run locally on the server's GPU — no need for endpoints.json.
+Access the UI at `http://your-server:7860`. All models run on the server's GPU without needing remote endpoints.
 
 ---
 
