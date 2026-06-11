@@ -196,6 +196,15 @@ def _cmd_profiles(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_mcp(args: argparse.Namespace) -> int:
+    """Start the MCP server."""
+    from tts_tests.mcp_server import run_server
+
+    _suppress_warnings()
+    run_server(host=args.host, port=args.port)
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="tts-studio",
@@ -261,6 +270,11 @@ def main():
     # profiles
     subparsers.add_parser("profiles", help="List voice profiles")
 
+    # mcp
+    mcp_parser = subparsers.add_parser("mcp", help="Start MCP server")
+    mcp_parser.add_argument("--host", default="0.0.0.0")
+    mcp_parser.add_argument("--port", type=int, default=8900)
+
     args = parser.parse_args()
 
     _setup_logging(verbose=args.verbose)
@@ -279,6 +293,7 @@ def main():
         "batch": _cmd_batch,
         "generate": _cmd_generate,
         "profiles": _cmd_profiles,
+        "mcp": _cmd_mcp,
     }
 
     handler = handlers[args.command]

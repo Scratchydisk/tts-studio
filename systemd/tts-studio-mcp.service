@@ -1,0 +1,18 @@
+[Unit]
+Description=TTS Studio MCP Server
+After=network.target
+
+[Service]
+Type=simple
+User=stewart
+WorkingDirectory=/home/stewart/tts-studio
+ExecStart=/home/stewart/tts-studio/venv/bin/tts-studio mcp
+Restart=on-failure
+RestartSec=5
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+Environment=CUDA_DEVICE_ORDER=PCI_BUS_ID
+
+[Install]
+WantedBy=multi-user.target

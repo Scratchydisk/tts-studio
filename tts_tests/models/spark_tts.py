@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import torch
 
 from tts_tests.base import ModelInfo, TTSModel, TTSResult
 from tts_tests.config import CACHE_DIR
@@ -23,14 +24,27 @@ def _ensure_repo() -> bool:
     """Clone the Spark-TTS repo if not present. Return True if available."""
     if SPARK_DIR.exists() and (SPARK_DIR / "cli" / "SparkTTS.py").exists():
         return True
+    # A previous run may have left a partial/incomplete clone; git refuses to
+    # clone into a non-empty dir (exit 128), so clear it first to self-heal.
+    if SPARK_DIR.exists():
+        import shutil
+        shutil.rmtree(SPARK_DIR, ignore_errors=True)
     try:
         import subprocess
         subprocess.run(
             ["git", "clone", "--depth", "1", SPARK_REPO_URL, str(SPARK_DIR)],
             check=True,
             capture_output=True,
+            text=True,
         )
         return True
+    except subprocess.CalledProcessError as e:
+        logger.warning(
+            "Failed to clone Spark-TTS (exit %s): %s",
+            e.returncode,
+            (e.stderr or "").strip(),
+        )
+        return False
     except Exception as e:
         logger.warning("Failed to clone Spark-TTS: %s", e)
         return False
@@ -75,6 +89,36 @@ class SparkTTS(TTSModel):
             model_dir=model_dir,
             device=device,
         )
+        if "cuda" in str(device) and torch.cuda.is_bf16_supported():
+            # bf16 halves LLM weights and KV cache; the fp32 stack overflows
+            # 4 GB cards into shared memory and generation crawls. bf16 rather
+            # than fp16 — the Qwen backbone overflows fp16 logits into NaN,
+            # tripping a device-side assert in sampling. BiCodec stays fp32 —
+            # it only receives integer token tensors from the LLM.
+            self._model.model.bfloat16()
+            # wav2vec2 (~1.2 GB fp32) only tokenizes reference audio, and
+            # extract_wav2vec2_features routes tensors via its .device — on
+            # small cards park it on CPU so long generations stop spilling
+            # VRAM into shared memory
+            gpu_index = torch.device(device).index or 0
+            total_gb = torch.cuda.get_device_properties(gpu_index).total_memory / 2**30
+            if total_gb < 6:
+                self._model.audio_tokenizer.feature_extractor.to("cpu")
+
+        # Captioning reuses one reference clip for every segment, but the
+        # engine re-runs wav2vec2 + BiCodec over it on each call. Memoise per
+        # path — the returned token tensors are only read downstream.
+        orig_tokenize = self._model.audio_tokenizer.tokenize
+        cache: dict[str, tuple] = {}
+
+        def cached_tokenize(audio_path):
+            key = str(audio_path)
+            if key not in cache:
+                cache.clear()  # keep at most one reference resident
+                cache[key] = orig_tokenize(audio_path)
+            return cache[key]
+
+        self._model.audio_tokenizer.tokenize = cached_tokenize
         self._device = device
 
     def unload(self) -> None:

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
+import torch
 
 from tts_tests import registry
 from tts_tests.audio_utils import cap_duration, trim_silence
@@ -139,6 +140,12 @@ def generate_speech_for_segments(
             entry["freeze_extra"] = round(padded - screen_dur, 3)
 
         timeline.append(entry)
+
+        # Return freed allocator blocks after each segment; varying sequence
+        # lengths otherwise fragment reserved memory until it spills into
+        # shared memory on small cards
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         if on_progress is not None:
             on_progress(i + 1, total)

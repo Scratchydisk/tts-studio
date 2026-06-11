@@ -29,7 +29,11 @@ zonos = ["zonos @ git+https://github.com/Zyphra/Zonos.git"]
 sesame-csm = ["csm @ git+https://github.com/SesameAILabs/csm.git"]
 tada = ["tada @ git+https://github.com/HumeAI/tada.git"]
 piper = ["piper-tts"]
-all = ["tts-studio[f5tts,dia,kokoro,sparktts,orpheus,outetts]"]
+mcp = ["mcp>=1.0"]  # HTTP transport is in mcp core since 1.x (no 'http' extra)
+# orpheus excluded: its vllm dependency pins transformers>=4.56 + torch==exact,
+# which conflicts with outetts (transformers==4.52.3). Use a separate venv or
+# a remote endpoint (endpoints.json) for Orpheus.
+all = ["tts-studio[f5tts,dia,kokoro,sparktts,outetts]"]
 
 [project.scripts]
 tts-studio = "tts_tests.cli:main"

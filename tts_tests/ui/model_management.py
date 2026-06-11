@@ -212,6 +212,12 @@ _VLLM_MODEL_DEFAULTS = {
     },
 }
 
+# Worker dependencies: worker_type -> (import_name, pip_package)
+_WORKER_DEPS = {
+    "orpheus": ("orpheus_tts", "orpheus-speech"),
+    "voxtral": ("soundfile", "soundfile"),
+}
+
 
 def _seed_servers_from_endpoints() -> None:
     """Seed vLLM server configs from endpoints.json for any not already configured."""
@@ -310,7 +316,7 @@ def _build_server_status() -> str:
         gpu = cfg.get("gpu", "—")
         hf_model = cfg.get("model", "—")
         status = _check_server_status(port) if isinstance(port, int) else "—"
-        status_badge = {"running": "running", "starting": "starting...", "stopped": "stopped"}.get(status, status)
+        status_badge = {"running": "running", "starting": "**starting — model loading, not ready yet**", "stopped": "stopped"}.get(status, status)
         lines.append(f"| {model_id} | {hf_model} | {port} | {gpu} | {status_badge} |")
     return "\n".join(lines)
 
@@ -345,6 +351,56 @@ def _start_vllm_server(model_id: str):
 
     # Free VRAM by unloading any locally loaded model before starting the server
     registry.unload_current()
+    import gc
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    # Warn if GPU is low on memory
+    try:
+        free, total = torch.cuda.mem_get_info(gpu)
+        free_gb = free / 1024**3
+        total_gb = total / 1024**3
+        used_gb = total_gb - free_gb
+        if free_gb < 6.0:
+            yield (
+                f"**Warning:** GPU {gpu} has only {free_gb:.1f} GB free "
+                f"({used_gb:.1f} / {total_gb:.1f} GB used). "
+                f"The model server may fail with OOM. "
+                f"Stop other models or processes using the GPU first.\n\n"
+            )
+    except Exception:
+        pass
+
+    # Check and install worker dependencies in the vLLM venv if needed
+    if worker_type and worker_type in _WORKER_DEPS:
+        import_name, pip_pkg = _WORKER_DEPS[worker_type]
+        check = subprocess.run(
+            [python, "-c", f"import {import_name}"],
+            capture_output=True, text=True,
+        )
+        if check.returncode != 0:
+            output = f"Installing {pip_pkg} into vLLM venv...\n\n"
+            yield output
+            pip_bin = str(Path(python).parent / "pip")
+            install_proc = subprocess.Popen(
+                [pip_bin, "install", pip_pkg],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            )
+            for line in install_proc.stdout:
+                output += line
+                yield output
+            install_proc.wait()
+            if install_proc.returncode != 0:
+                output += f"\n--- Failed to install {pip_pkg}. ---"
+                yield output
+                return
+            output += f"\n{pip_pkg} installed successfully.\n\n"
+            yield output
 
     # Build command based on worker type
     if worker_type in ("voxtral", "orpheus"):
@@ -361,7 +417,13 @@ def _start_vllm_server(model_id: str):
         ] + extra_args
         display_cmd = f"vllm-omni serve {hf_model} --port {port} {' '.join(extra_args)}"
 
-    env = {**os.environ, "CUDA_DEVICE_ORDER": "PCI_BUS_ID", "CUDA_VISIBLE_DEVICES": str(gpu), "PYTHONUNBUFFERED": "1"}
+    env = {
+        **os.environ,
+        "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+        "CUDA_VISIBLE_DEVICES": str(gpu),
+        "PYTHONUNBUFFERED": "1",
+        "HF_HUB_DISABLE_PROGRESS_BARS": "0",
+    }
 
     output = f"$ CUDA_VISIBLE_DEVICES={gpu} {display_cmd}\n\n"
     yield output
@@ -651,6 +713,42 @@ def build_model_management_tab():
         outputs=[vllm_venv_status],
     )
 
+    # --- HuggingFace token ---
+    from huggingface_hub import get_token, login
+
+    current_token = get_token() or ""
+    token_masked = f"{'*' * 8}...{current_token[-4:]}" if current_token else ""
+
+    with gr.Row():
+        hf_token_input = gr.Textbox(
+            label="HuggingFace token",
+            value="",
+            placeholder=token_masked or "hf_...",
+            type="password",
+            info="Required for gated models (e.g. Orpheus). Saved to ~/.cache/huggingface/token.",
+        )
+        hf_token_save = gr.Button("Save", variant="secondary")
+
+    hf_token_status = gr.Markdown(
+        f"Token: {'configured' if current_token else 'not set'}"
+    )
+
+    def _save_hf_token(token):
+        if not token or not token.strip():
+            return "Please enter a token."
+        try:
+            # skip_if_logged_in=False so re-saving overwrites an existing token
+            login(token=token.strip(), skip_if_logged_in=False)
+        except Exception as e:
+            return f"Failed to save token: {e}"
+        return "HuggingFace token saved."
+
+    hf_token_save.click(
+        fn=_save_hf_token,
+        inputs=[hf_token_input],
+        outputs=[hf_token_status],
+    )
+
     # Server status table
     server_status = gr.Markdown(value=_build_server_status)
 
@@ -680,6 +778,7 @@ def build_model_management_tab():
         srv_start_btn = gr.Button("Start", variant="primary")
         srv_stop_btn = gr.Button("Stop", variant="stop")
         srv_refresh_btn = gr.Button("Refresh Status", variant="secondary")
+        srv_nuke_btn = gr.Button("Free GPU", variant="stop")
 
     srv_log = gr.Code(label="Server log", language="shell", lines=15, max_lines=15)
 
@@ -762,6 +861,66 @@ def build_model_management_tab():
     srv_refresh_btn.click(
         fn=_refresh,
         outputs=[server_status, srv_select],
+    )
+
+    def _nuke_gpu():
+        """Kill all tracked servers, unload models, and force-free GPU memory."""
+        killed = []
+        # Stop all tracked server processes
+        for mid, proc in list(_vllm_processes.items()):
+            if proc.poll() is None:
+                proc.kill()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+            killed.append(mid)
+            _vllm_processes.pop(mid, None)
+
+        # Also kill any processes on known server ports
+        servers = get_vllm_servers()
+        for mid, cfg in servers.items():
+            port = cfg.get("port")
+            if port:
+                try:
+                    result = subprocess.run(
+                        ["fuser", f"{port}/tcp"],
+                        capture_output=True, text=True,
+                    )
+                    pids = result.stdout.strip().split()
+                    for pid in pids:
+                        try:
+                            os.kill(int(pid), signal.SIGKILL)
+                            killed.append(f"pid:{pid}")
+                        except ProcessLookupError:
+                            pass
+                except Exception:
+                    pass
+
+        # Unload any locally loaded model
+        registry.unload_current()
+
+        # Force clear CUDA memory
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # Report
+        if killed:
+            msg = f"Killed processes: {', '.join(killed)}. "
+        else:
+            msg = "No tracked servers to kill. "
+        try:
+            free, total = torch.cuda.mem_get_info(0)
+            msg += f"GPU 0: {free / 1024**3:.1f} / {total / 1024**3:.1f} GB free."
+        except Exception:
+            msg += "Could not query GPU memory."
+        return msg, _build_server_status(), _build_model_table()
+
+    srv_nuke_btn.click(
+        fn=_nuke_gpu,
+        outputs=[srv_log, server_status, model_table],
     )
 
     return model_table

@@ -1,4 +1,7 @@
 venv/
+venv-win/
+.mcp.json
+.maximkeep/
 output/
 reference_audio/
 __pycache__/
@@ -7,6 +10,8 @@ __pycache__/
 endpoints.json
 profiles.json
 settings.json
+settings.tmp
+profiles.tmp
 .playwright-mcp/
 demo/screenshots/
 demo/frames.txt

@@ -73,7 +73,8 @@ def _test_voice(
         device = get_device(model_id)
         model = registry.load_model(model_id, device=device)
     except Exception as e:
-        yield None, f"Failed to load model: {e}"
+        from tts_tests.ui.shared import format_load_error
+        yield None, format_load_error(e)
         return
 
     yield None, "Generating audio..."

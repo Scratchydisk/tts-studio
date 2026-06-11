@@ -2,7 +2,7 @@
 
 A Gradio web app for testing open-source text-to-speech models and processing caption-to-speech video pipelines. Compare TTS models side by side, manage reusable voice profiles, and batch-process videos with spoken captions.
 
-**Requires Python 3.10–3.12.** Several model dependencies (Kokoro, F5-TTS, etc.) do not yet support Python 3.13.
+**Requires Python 3.11–3.12** for the full `.[all]` install (on 3.10, F5-TTS and Dia have conflicting numpy requirements). You don't need to install Python yourself — `run.sh` and `run.ps1` provision Python 3.12 automatically via [uv](https://docs.astral.sh/uv/), which is the only prerequisite. Several model dependencies do not yet support Python 3.13.
 
 ## Demos
 
@@ -10,11 +10,28 @@ A Gradio web app for testing open-source text-to-speech models and processing ca
 
 ## Quick start
 
+First install [uv](https://docs.astral.sh/uv/getting-started/installation/) (no sudo or existing Python needed):
+
 ```bash
-./run.sh
+# Linux / macOS / WSL
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-This creates a virtual environment, installs dependencies, and launches the web UI at `http://localhost:7860`. The server binds to `0.0.0.0` so it's accessible from other machines on the network at `http://<your-ip>:7860`.
+```powershell
+# Windows PowerShell
+irm https://astral.sh/uv/install.ps1 | iex
+```
+
+Then launch:
+
+```bash
+./run.sh        # Linux / WSL
+.\run.ps1       # Windows PowerShell
+```
+
+This creates a virtual environment (Python 3.12, provisioned via uv), installs dependencies, and launches the web UI at `http://localhost:7860`. The server binds to `0.0.0.0` so it's accessible from other machines on the network at `http://<your-ip>:7860`.
+
+The scripts detect your GPU and install the matching PyTorch build automatically: NVIDIA Blackwell cards (RTX 50-series, `sm_120`) get the CUDA 12.8 wheel, machines with no NVIDIA GPU get the CPU-only wheel, and everything else uses the default. If you install manually with `uv pip install -e ".[all]"` on a Blackwell card, you'll need to re-pin PyTorch afterwards (`uv pip install --index-url https://download.pytorch.org/whl/cu128 --upgrade torch torchaudio`), since the model extras otherwise pull a build without `sm_120` kernels.
 
 ### CLI
 
@@ -32,6 +49,10 @@ tts-studio caption video.mp4 --model kokoro-82m --voice bf_emma
 tts-studio batch ./videos/ --profile emma
 ```
 
+## MCP server
+
+TTS Studio includes an [MCP server](docs/mcp-server.md) that lets AI assistants like Claude caption videos using your voice profiles. Start it with `tts-studio mcp` and connect from Claude Desktop or Claude Code. See the [MCP server docs](docs/mcp-server.md) for setup instructions.
+
 ## Supported models
 
 Quality tiers: **S** = best-in-class, **A** = excellent, **B** = good, **C** = decent/niche.
@@ -48,9 +69,9 @@ Quality tiers: **S** = best-in-class, **A** = excellent, **B** = good, **C** = d
 | **F5-TTS** | A | — | ~2.5 GB | Yes | — | included in `.[all]` |
 | **Voxtral-4B** | A | 4B | ~16 GB | Yes* | 20 (9 langs) | remote via vLLM |
 | **Dia-1.6B** | B | 1.6B | ~10 GB | No | 2 | included in `.[all]` |
-| **Orpheus-3B** | B | 3B | ~7 GB | No | 8 | included in `.[all]` |
+| **Orpheus-3B** | B | 3B | ~7 GB | No | 8 | remote via vLLM (see below) |
 | **Spark-TTS-0.5B** | B | 0.5B | ~2 GB | Yes | — | included in `.[all]` |
-| **OuteTTS-0.3-500M** | B | 500M | ~2 GB | Yes | — | `pip install -e ".[outetts]"` |
+| **OuteTTS-0.3-500M** | B | 500M | ~2 GB | Yes | — | included in `.[all]` |
 
 \* Voxtral voice cloning only works with the local variant, not via the remote API.
 
@@ -240,9 +261,21 @@ Dia requires >= 10 GB VRAM (float32 only — produces garbage at half precision)
 }
 ```
 
+### HuggingFace token
+
+Some models (e.g. Orpheus) are gated on HuggingFace and require authentication to download. You can set your HuggingFace token in the **Models** tab under "HuggingFace token", or from the command line:
+
+```bash
+huggingface-cli login
+```
+
+The token is stored at `~/.cache/huggingface/token` and is shared across all virtual environments for the same user.
+
 ### Orpheus-3B remote server
 
-Orpheus uses vLLM internally for inference and a SNAC decoder for audio. TTS Studio includes a bundled worker (`workers/orpheus_worker.py`) that can be started from the **Models** tab, or run manually:
+Orpheus is a gated model — you must accept the license at [canopylabs/orpheus-3b-0.1-ft](https://huggingface.co/canopylabs/orpheus-3b-0.1-ft) and set a HuggingFace token (see above) before first use.
+
+Orpheus uses vLLM internally for inference and a SNAC decoder for audio. It is deliberately **not** part of the `.[all]` install: vLLM pins exact torch and recent transformers versions that conflict with other bundled models, so Orpheus always runs as a remote worker from its own venv. TTS Studio includes a bundled worker (`workers/orpheus_worker.py`) that can be started from the **Models** tab, or run manually:
 
 ```bash
 # Install orpheus-speech into the vLLM venv

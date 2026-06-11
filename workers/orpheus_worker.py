@@ -31,21 +31,50 @@ VOICES = ["tara", "leah", "jess", "leo", "dan", "mia", "zac", "zoe"]
 _model = None
 
 
-def load_model():
+def load_model(gpu_memory_utilization: float = 0.85):
     """Load the Orpheus model."""
     global _model
     from orpheus_tts import OrpheusModel
 
-    logger.info("Loading model (this may take a while)...")
+    # Patch OrpheusModel to pass gpu_memory_utilization to vLLM
+    _orig_setup = OrpheusModel._setup_engine
+
+    def _patched_setup(self):
+        from vllm import AsyncEngineArgs, AsyncLLMEngine
+        engine_args = AsyncEngineArgs(
+            model=self.model_name,
+            dtype=self.dtype,
+            gpu_memory_utilization=gpu_memory_utilization,
+            max_model_len=8192,
+        )
+        return AsyncLLMEngine.from_engine_args(engine_args)
+
+    OrpheusModel._setup_engine = _patched_setup
+
+    logger.info(
+        "Loading model %s (gpu_memory_utilization=%.2f) — "
+        "this will download weights on first run (~6 GB)...",
+        MODEL_NAME, gpu_memory_utilization,
+    )
     _model = OrpheusModel(model_name=MODEL_NAME)
-    logger.info("Model loaded.")
+    OrpheusModel._setup_engine = _orig_setup
+    logger.info("Model loaded and ready.")
+
+
+_request_counter = 0
 
 
 def generate_speech(text: str, voice: str = "tara") -> tuple[bytes, int]:
     """Generate speech, returning (wav_bytes, sample_rate)."""
+    global _request_counter
+    _request_counter += 1
+    request_id = f"req-{_request_counter:06d}"
+
     start = time.perf_counter()
 
-    audio_chunks = _model.generate_speech(prompt=text, voice=voice)
+    from orpheus_tts.engine_class import tokens_decoder_sync
+    token_gen = _model.generate_tokens_sync(prompt=text, voice=voice, request_id=request_id)
+    audio_chunks = tokens_decoder_sync(token_gen)
 
     # Collect all PCM chunks (int16 bytes at 24kHz)
     pcm_data = b""
@@ -89,33 +118,26 @@ def create_app():
             "data": [{"id": MODEL_NAME, "object": "model"}],
         }
 
-    @app.post("/v1/audio/speech")
-    def speech(
-        input: str = Form(...),
-        voice: str = Form("tara"),
-        model: str = Form(MODEL_NAME),
-        response_format: str = Form("wav"),
-    ):
-        """OpenAI-compatible speech endpoint."""
-        wav_bytes, sr = generate_speech(input, voice=voice)
-        return Response(
-            content=wav_bytes,
-            media_type="audio/wav",
-            headers={"X-Sample-Rate": str(sr)},
-        )
-
-    # Also support JSON body for compatibility with remote.py
+    from fastapi import Request
     from pydantic import BaseModel
 
-    class SpeechRequestJSON(BaseModel):
+    class SpeechRequest(BaseModel):
         input: str
         voice: str = "tara"
         model: str = MODEL_NAME
         response_format: str = "wav"
 
-    @app.post("/v1/audio/speech/json")
-    def speech_json(req: SpeechRequestJSON):
-        """JSON body variant."""
+    @app.post("/v1/audio/speech")
+    async def speech(request: Request):
+        """OpenAI-compatible speech endpoint — accepts JSON or form data."""
+        content_type = request.headers.get("content-type", "")
+        if "application/json" in content_type:
+            data = await request.json()
+            req = SpeechRequest(**data)
+        else:
+            form = await request.form()
+            req = SpeechRequest(**form)
+
         wav_bytes, sr = generate_speech(req.input, voice=req.voice)
         return Response(
             content=wav_bytes,
@@ -134,12 +156,13 @@ def main():
                         help="Host to bind to (default: 0.0.0.0)")
     parser.add_argument("--gpu", type=int, default=0,
                         help="GPU index to use (default: 0)")
+    parser.add_argument("--gpu-mem", type=float, default=0.85,
+                        help="GPU memory utilization for vLLM (default: 0.85)")
     args = parser.parse_args()
 
     # Pin to requested GPU
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
-
-    load_model()
+    load_model(gpu_memory_utilization=args.gpu_mem)
 
     import uvicorn
     app = create_app()

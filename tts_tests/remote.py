@@ -56,7 +56,9 @@ class RemoteTTSModel(TTSModel):
             except Exception:
                 continue
         raise RuntimeError(
-            f"Cannot reach remote server at {self._base_url}"
+            f"Cannot reach remote server at {self._base_url}. "
+            f"If you just started the server, it may still be loading the model — "
+            f"check the server log in the Models tab and wait for 'Server is ready' before retrying."
         )
 
     def unload(self) -> None:

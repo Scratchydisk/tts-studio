@@ -42,6 +42,20 @@ def get_icon_legend() -> str:
     )
 
 
+def format_load_error(error: Exception) -> str:
+    """Format a model loading error with helpful context."""
+    msg = str(error)
+    if "CUDA out of memory" in msg:
+        return (
+            f"Failed to load model: CUDA out of memory. "
+            f"A model server may be using the GPU — check the Models tab "
+            f"for running servers and stop any you don't need, then retry."
+        )
+    if "Cannot reach remote server" in msg:
+        return f"Failed to load model: {msg}"
+    return f"Failed to load model: {msg}"
+
+
 def get_model_choices(include_unavailable: bool = True) -> list[tuple[str, str]]:
     """Return (display_label, model_id) for model dropdowns.
 

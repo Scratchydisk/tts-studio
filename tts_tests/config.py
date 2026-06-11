@@ -34,11 +34,11 @@ def _read_settings() -> dict:
 
 def _write_settings(data: dict) -> None:
     """Write settings.json atomically."""
-    import tempfile
     content = json.dumps(data, indent=4, ensure_ascii=False) + "\n"
     tmp = SETTINGS_FILE.with_suffix(".tmp")
     tmp.write_text(content, encoding="utf-8")
-    tmp.rename(SETTINGS_FILE)
+    # Path.replace (os.replace) overwrites atomically on Windows; rename does not
+    tmp.replace(SETTINGS_FILE)
 
 
 def get_available_gpus() -> list[dict]:

@@ -12,11 +12,11 @@ TTS Studio is a Gradio web app + CLI for testing open-source text-to-speech mode
 # Quick start (creates venv, installs deps, launches UI)
 ./run.sh
 
-# Install in development mode
-pip install -e ".[all]"
+# Install in development mode (use uv — pip backtracks badly on this dep tree)
+uv pip install -e ".[all]"
 
 # Install a specific model's extras
-pip install -e ".[chatterbox]"
+uv pip install -e ".[chatterbox]"
 
 # Launch web UI (default command)
 tts-studio serve
@@ -68,7 +68,9 @@ Create `tts_tests/models/{model_id}.py` exporting `MODEL_CLASS` (TTSModel subcla
 
 - **ffmpeg** on PATH required for caption pipeline (video rendering, ffprobe for FPS/duration)
 - **CUDA** optional but expected for local models
-- Python >= 3.10, PyTorch >= 2.0
+- Python >= 3.11 for the `all` extra (run.sh/run.ps1 provision 3.12 via uv); base package works on 3.10
+- PyTorch >= 2.0
+- Orpheus is excluded from `all` (vllm dependency conflicts) — runs as a remote worker via `endpoints.json`
 
 ## Configuration files
 

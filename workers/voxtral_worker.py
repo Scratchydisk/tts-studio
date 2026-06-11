@@ -37,9 +37,9 @@ def load_model():
     logger.info("Loading tokenizer...")
     _tokenizer = MistralTokenizer.from_hf_hub(MODEL_NAME)
 
-    logger.info("Loading model (this may take a while)...")
+    logger.info("Loading model %s — this will download weights on first run (~8 GB)...", MODEL_NAME)
     _llm = Omni(model=MODEL_NAME)
-    logger.info("Model loaded.")
+    logger.info("Model loaded and ready.")
 
 
 def generate_speech(text: str, voice: str = "neutral_female",

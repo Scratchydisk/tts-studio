@@ -123,7 +123,8 @@ def _write_profiles_file(data: dict) -> None:
     content = json.dumps(data, indent=4, ensure_ascii=False) + "\n"
     tmp = PROFILES_FILE.with_suffix(".tmp")
     tmp.write_text(content, encoding="utf-8")
-    tmp.rename(PROFILES_FILE)
+    # Path.replace (os.replace) overwrites atomically on Windows; rename does not
+    tmp.replace(PROFILES_FILE)
 
 
 def list_profiles() -> dict[str, VoiceProfile]:
